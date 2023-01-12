@@ -1,0 +1,61 @@
+# Docker
+# Build and push an image to Azure Container Registry
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  # Container registry service connection established during pipeline creation
+  tag: '$(Build.BuildId)'
+  containerRegistry: 'peoplefundacr.azurecr.io'
+  acrname: 'peoplefundacr'
+  poolName: 'Default'
+  resource_group: 'peoplefund-test-rg'
+  location: 'koreacentral'
+  container_env: 'album-env'
+
+stages:
+- stage: Build
+  displayName: Build albumFrontend Containers
+  jobs:
+  - job: Build1
+    displayName: Build albumFrontend
+    pool: $(poolName)
+    steps:
+    - task: Bash@3
+      displayName: Build albumFrontend Image
+      inputs:
+        targetType: 'inline'
+        script: |
+            docker build --pull -t $(containerRegistry)/albumfrontend:$(tag) -t $(containerRegistry)/albumfrontend:$(tag) ./src
+            docker image list
+    - task: Bash@3
+      displayName: Push albumFrontend Image
+      inputs:
+        targetType: 'inline'
+        script: |
+          az login --identity
+          az acr login --name $(acrname)
+          docker push $(containerRegistry)/albumfrontend:$(tag)
+- stage: Deploy
+  displayName: Deploy albumFrontend Containers
+  dependsOn: [Build]
+  jobs:
+  - job: Deploy1
+    displayName: Deploy albumFrontend
+    pool: $(poolName)
+    steps:
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          API_BASE_URL=$(az containerapp show --resource-group $(resource_group) --name albumbackend --query properties.configuration.ingress.fqdn -o tsv)
+          az containerapp create --image $(containerRegistry)/albumfrontend:$(tag) \
+          --name albumfrontend --resource-group $(resource_group) --environment $(container_env) \
+          --query properties.configuration.ingress.fqdn --registry-server $(containerRegistry) \
+          --registry-username $(acrname) --registry-password $(registry_pwd) \
+          --min-replicas 1 --ingress external --target-port 3000 --exposed-port 80 --env-vars API_BASE_URL=https://$API_BASE_URL
